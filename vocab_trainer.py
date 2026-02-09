@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-"""
-Weighted CLI vocabulary trainer.
-
-Features:
-- Import vocab from simple key,value text files
-- Stores progress in CSV
-- Weighted random selection (missed items appear more often)
-- Direction toggle (key->value or value->key)
-- Multi-file training
-- Screen clears between questions
-- Limbo state: shows result, waits for keypress
-- Ctrl+C clean exit with autosave
-"""
-
 from __future__ import annotations
 import csv
 import random
@@ -151,7 +136,7 @@ def import_vocab(txt_path: Path, csv_path: Path):
 
     store = VocabStore(csv_path)
     store.save(items)
-    print(f"Imported {len(items)} items → {csv_path}")
+    print(f"imported {len(items)} items -> {csv_path}")
 
 
 # ------------------------
@@ -159,13 +144,24 @@ def import_vocab(txt_path: Path, csv_path: Path):
 # ------------------------
 
 class Trainer:
-    def __init__(self, items: List[VocabItem], *, reverse: bool = False):
+    def __init__(self, items: List[VocabItem], *, reverse: bool = False, no_replacement: bool = False):
         self.items = items
         self.reverse = reverse
+        self.no_replacement = no_replacement
+        self.remaining = items.copy() if no_replacement else []
 
     def pick(self) -> VocabItem:
-        weights = [item.weight for item in self.items]
-        return random.choices(self.items, weights=weights, k=1)[0]
+        if self.no_replacement:
+            if not self.remaining:
+                print("\nyou've completed all vocab items")
+                return None
+            weights = [item.weight for item in self.remaining]
+            item = random.choices(self.remaining, weights=weights, k=1)[0]
+            self.remaining.remove(item)
+            return item
+        else:
+            weights = [item.weight for item in self.items]
+            return random.choices(self.items, weights=weights, k=1)[0]
 
     def prompt(self, item: VocabItem):
         clear_screen()
@@ -173,23 +169,28 @@ class Trainer:
         question = item.value if self.reverse else item.key
         answer = item.key if self.reverse else item.value
 
-        user = input(f"{question} → ").strip()
+        user = input(f"{question} -> ").strip()
 
         correct = user == answer
         if correct:
-            print("\n✓ Correct")
+            print("\ncorrect")
             item.mark_correct()
         else:
-            print(f"\n✗ Wrong → {answer}")
+            print(f"\nwrong -> {answer}")
             item.mark_wrong()
 
-        print("\nPress any key for next...")
+        print("\npress any key for next...")
         wait_for_key()
 
     def run(self):
-        print("Ctrl+C to quit.\n")
+        print("ctrl+c to quit.\n")
+        if self.no_replacement:
+            print(f"quiz mode: {len(self.remaining)} items\n")
+        
         while True:
             item = self.pick()
+            if item is None:
+                break
             self.prompt(item)
 
 
@@ -200,11 +201,15 @@ class Trainer:
 def usage():
     print(
         """
-Usage:
+usage:
   python vocab_trainer.py import vocab.txt
-  python vocab_trainer.py train vocab.csv [more.csv ...] [--reverse]
+  python vocab_trainer.py train vocab.csv [more.csv ...] [--reverse] [--no-replacement]
 
-Format for vocab.txt:
+options:
+  --reverse          quiz value -> key instead of key -> value
+  --no-replacement   each item appears only once per session
+
+format for vocab.txt:
   doctor,isha
   nurse,kangoshi
 """
@@ -221,7 +226,7 @@ def main():
     if command == "import":
         path = Path(sys.argv[2])
         if not path.exists():
-            print("File not found.")
+            print("file not found.")
             sys.exit(1)
         csv_path = path.with_suffix(".csv")
         import_vocab(path, csv_path)
@@ -229,6 +234,7 @@ def main():
     elif command == "train":
         paths = [Path(p) for p in sys.argv[2:] if not p.startswith("--")]
         reverse = "--reverse" in sys.argv
+        no_replacement = "--no-replacement" in sys.argv
 
         if not paths:
             usage()
@@ -237,17 +243,17 @@ def main():
 
         for p in paths:
             if not p.exists():
-                print(f"File not found: {p}")
+                print(f"file not found: {p}")
                 sys.exit(1)
             items.extend(VocabStore(p).load())
 
-        trainer = Trainer(items, reverse=reverse)
+        trainer = Trainer(items, reverse=reverse, no_replacement=no_replacement)
 
         def handle_exit(sig, frame):
             clear_screen()
-            print("Saving progress...")
+            print("saving progress...")
             save_grouped(items)
-            print("Done.")
+            print("done.")
             sys.exit(0)
 
         signal.signal(signal.SIGINT, handle_exit)
